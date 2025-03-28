@@ -1,3 +1,62 @@
+
+
+/*
+ * Ce programme implémente un système combinant un module GPS Neo-6M et un module LoRa pour envoyer des données GPS via un réseau LoRaWAN.
+ * Il utilise un écran OLED pour afficher des informations telles que la tension de la batterie et les coordonnées GPS.
+ * Voici une explication détaillée de chaque partie du code :
+
+ * 1. **Bibliothèques et Déclarations** :
+ *    - `LoRaWan_APP.h` : Fournit les fonctionnalités pour la communication LoRaWAN.
+ *    - `TinyGPS++.h` : Bibliothèque pour traiter les données GPS provenant du module Neo-6M.
+ *    - `HT_SH1107Wire.h` : Bibliothèque pour contrôler l'écran OLED SH1107.
+ *    - Les variables globales incluent `gps` pour gérer les données GPS, `oledDisplay` pour l'écran OLED, et `txpacket` pour stocker les messages à envoyer.
+
+ * 2. **Fonctions Utilitaires** :
+ *    - `VextON()` et `VextOFF()` : Contrôlent l'alimentation des périphériques externes via la broche Vext.
+ *    - `DoubleToString()` : Convertit un nombre à virgule flottante en chaîne de caractères avec un nombre spécifié de décimales.
+ *    - `fracPart()` : Extrait la partie fractionnaire d'un nombre à virgule flottante.
+
+ * 3. **Fonctions Principales** :
+ *    - `sendShortMsg()` : Envoie un message court contenant des informations telles que la date, l'état des broches numériques, et les coordonnées GPS.
+ *    - `sendMsg()` : Vérifie si les données GPS sont valides, formate les coordonnées GPS, et les envoie via LoRa.
+ *    - `prepareTxFrame(uint8_t port)` : Prépare les données à envoyer via LoRa, y compris la tension de la batterie et les coordonnées GPS. 
+ *      Elle affiche également les coordonnées GPS sur l'écran OLED en deux lignes distinctes (latitude et longitude).
+
+ * 4. **Affichage OLED** :
+ *    - L'écran OLED est utilisé pour afficher des informations telles que :
+ *      - La tension de la batterie (en mV).
+ *      - Les coordonnées GPS (latitude et longitude) sur deux lignes.
+ *      - Un message "GPS not valid" si les données GPS ne sont pas valides.
+
+ * 5. **Configuration LoRaWAN** :
+ *    - Les paramètres LoRaWAN incluent les clés OTAA (`devEui`, `appEui`, `appKey`) et ABP (`nwkSKey`, `appSKey`, `devAddr`).
+ *    - La région LoRaWAN, la classe (A ou C), et d'autres paramètres comme l'ADR et le cycle d'envoi sont configurés.
+
+ * 6. **Fonction `setup()`** :
+ *    - Initialise l'écran OLED, le module GPS, et les broches nécessaires.
+ *    - Configure les paramètres LoRaWAN et initialise le module LoRa.
+
+ * 7. **Fonction `loop()`** :
+ *    - Lit les données GPS depuis le port série.
+ *    - Si des données GPS valides sont reçues, elles sont encodées et envoyées via LoRa.
+ *    - Implémente une machine à états pour gérer les différentes étapes du fonctionnement LoRaWAN :
+ *      - `DEVICE_STATE_INIT` : Initialise les paramètres LoRaWAN.
+ *      - `DEVICE_STATE_JOIN` : Rejoint le réseau LoRaWAN.
+ *      - `DEVICE_STATE_SEND` : Prépare et envoie les données.
+ *      - `DEVICE_STATE_CYCLE` : Planifie le prochain envoi.
+ *      - `DEVICE_STATE_SLEEP` : Met le module en veille pour économiser de l'énergie.
+
+ * 8. **Détails Techniques** :
+ *    - Les données GPS sont formatées avec précision en utilisant des fonctions comme `sprintf` et `fracPart`.
+ *    - Les données sont envoyées via LoRa en utilisant la bibliothèque LoRaWan_APP.
+ *    - La tension de la batterie est mesurée et affichée en mV.
+ *    - Le programme gère les erreurs, comme l'absence de données GPS valides, en affichant un message approprié sur l'écran OLED.
+
+ * Ce programme est conçu pour fonctionner sur une carte CubeCell avec un module GPS Neo-6M et un écran OLED SH1107.
+ * Il combine des fonctionnalités de communication LoRaWAN, de traitement GPS, et d'affichage OLED pour créer un système complet et autonome.
+ */
+
+
 #include "LoRaWan_APP.h"
 #include "Arduino.h"
 #include <TinyGPS++.h>
@@ -9,12 +68,14 @@
 
 //SH1107Wire  display(0x3c, 500000, SDA, SCL ,GEOMETRY_128_64,GPIO10); // addr, freq, sda, scl, resolution, rst
 SH1107Wire oledDisplay(0x3c, 500000, SDA, SCL, GEOMETRY_128_64, GPIO10);
+//bien prendre SH1107Wire oledDisplay et non display car il doit être utilisé dans une bibliothèque lorawan par exemple
 
 
 static const uint32_t GPSBaud = 9600;
 
 // The TinyGPS++ object
 TinyGPSPlus gps;
+#define TX_OUTPUT_POWER                             22        // dBm
 
 /*
 #define RF_FREQUENCY                                868E6 // Hz
@@ -22,14 +83,14 @@ TinyGPSPlus gps;
 #define TX_OUTPUT_POWER                             20        // dBm
 
 #define LORA_BANDWIDTH                              1         // [0: 125 kHz,
-//  1: 250 kHz,
-//  2: 500 kHz,
-//  3: Reserved]
+                                //  1: 250 kHz,
+                                //  2: 500 kHz,
+                                //  3: Reserved]
 #define LORA_SPREADING_FACTOR                       11         // [SF7..SF12]
 #define LORA_CODINGRATE                             1         // [1: 4/5,
-//  2: 4/6,
-//  3: 4/7,
-//  4: 4/8]
+                                //  2: 4/6,
+                                //  3: 4/7,
+                                //  4: 4/8]
 #define LORA_PREAMBLE_LENGTH                        8         // Same for Tx and Rx
 #define LORA_SYMBOL_TIMEOUT                         0         // Symbols
 #define LORA_FIX_LENGTH_PAYLOAD_ON                  false
@@ -53,11 +114,13 @@ void  DoubleToString( char *str, double double_num, unsigned int len);
 void sendMsg();
 int fracPart(double val, int n);
 
-
+//pour alimenter des modules externes
+//pas besoin de préciser le pin Vext car il est déjà défini dans le fichier board.h
 void VextON(void)
 {
   pinMode(Vext,OUTPUT);
   digitalWrite(Vext, LOW);
+  //LOW pour activer l'alimentation des modules externes
 }
 
 void VextOFF(void) //Vext default OFF
@@ -145,7 +208,7 @@ void prepareTxFrame(uint8_t port) {
   Serial.println( " mV ");
 
 
-
+  //affichage sur l'écran oled
   oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
   oledDisplay.clear();
   oledDisplay.display();
@@ -161,8 +224,16 @@ void prepareTxFrame(uint8_t port) {
 
 
 
-
-
+  // la transmission sur LORA est conditionnée par le format des octets envoyés
+  // il faut donc convertir la tension de la batterie en 2 octets
+  // la tension de la batterie est sur 16 bits
+  // on prend les 8 bits de poids fort et les 8 bits de poids faible
+  // on envoie les 2 octets sur LORA
+  // on reconstitue la tension de la batterie à la réception
+  // on affiche la tension de la batterie sur l'écran OLED
+  // on affiche les coordonnées GPS sur l'écran OLED
+  // on envoie les coordonnées GPS sur LORA
+  // on reconstitue les coordonnées GPS à la réception
   if (gps.location.isValid()) {
     appDataSize = 10; // nombre total d'octets de la trame envoyée
     // et à changer selon le nombre de balances et capteurs
@@ -182,7 +253,11 @@ void prepareTxFrame(uint8_t port) {
 
     Serial.println(txpacket);
 
-
+    //affichage sur l'écran oled
+    //alignement du texte au centre
+    //avec une police de caractères de taille 16
+    //un angle de rotation de 0 degrés
+    //affichage de la latitude et de la longitude sur 2 lignes
     oledDisplay.setTextAlignment(TEXT_ALIGN_CENTER);
     oledDisplay.clear();
     oledDisplay.display();
@@ -244,12 +319,7 @@ void prepareTxFrame(uint8_t port) {
     appData[5] = (uint8_t)((abs(fracPart(gps.location.lat(), 6)) ));
     Serial.print( " lat ");
     Serial.println(appData[5]);
-    //Serial.println( " lat ");
-    //Serial.print(appData[3]);
-
-    //appData[4] = (uint8_t)(abs(fracPart(gps.location.lat(), 6)));
-    //Serial.println( " lat ");
-    //Serial.print(appData[4]);
+    
     
     appData[6] = (uint8_t)(gps.location.lng());
     Serial.print( " lon ");
@@ -264,13 +334,7 @@ void prepareTxFrame(uint8_t port) {
     appData[9] = (uint8_t)((abs(fracPart(gps.location.lng(), 6)) ));
     Serial.print( " lon ");
     Serial.println(appData[9]);
-    //Serial.println( " lon ");
-    //Serial.print(appData[6]);
-
-    //appData[7] = (uint8_t)(abs(fracPart(gps.location.lng(), 6)));
-    //Serial.println( " lon ");
-    //Serial.print(appData[7]);
-
+    
   } else {
     Serial.println("GPS location not valid");
   }
