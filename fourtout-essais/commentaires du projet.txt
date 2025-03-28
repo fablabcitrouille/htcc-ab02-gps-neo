@@ -1,3 +1,4 @@
 Dans essaiOled_htcc_gps_neo6M_LORA_OK.cpp
 
 bien prendre SH1107Wire oledDisplay et non display car il doit être utilisé dans une bibliothèque lorawan par exemple
+essai de rédaction à partir du site github pour faire pull ensuite à partir de mon projet local
